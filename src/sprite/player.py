@@ -6,7 +6,7 @@ class Player(pygame.sprite.Sprite):
         super(Player, self).__init__()
         self.SIZE = 200
         self.STEP = 50
-        self.COLOR = pygame.Color((0, 255, 0))
+        self.COLOR = pygame.Color((255, 0, 0))
 
         self.surf = pygame.Surface((self.SIZE, self.SIZE))
         self.surf.fill(self.COLOR)
