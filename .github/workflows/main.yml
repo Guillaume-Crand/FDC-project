@@ -1,0 +1,12 @@
+on:
+  issues:
+    types: [opened]
+jobs:
+  createCard:
+    runs-on: FDC-project
+    steps:
+      - name: Create or Update Project Card
+        uses: peter-evans/create-or-update-project-card@v1
+        with:
+          project-name: Dev FDC-Project
+          column-name: Idears
