@@ -2,8 +2,10 @@ import pygame
 
 pygame.init()
 
+from src.menu import Menu
 from src.sprite.background import Background
 from src.sprite.player import Player
+
 
 if __name__ == "__main__":
     screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
@@ -11,16 +13,17 @@ if __name__ == "__main__":
 
     width, height = screen.get_size()
 
+    menu = Menu(screen)
+    menu.blit(screen)
+
     player = Player()
     background = Background(screen)
     to_display = [background, player]
-
     running = True
     while running:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
-
             if event.type == pygame.KEYDOWN:
                 match event.key:
                     case pygame.K_p:
@@ -35,9 +38,9 @@ if __name__ == "__main__":
                         player.move(1, 0)
                     case _:
                         pass
-
-        for sprite in to_display:
-            sprite.blit(screen)
+        menu.blit(screen)
+        #for sprite in to_display:
+            #sprite.blit(screen)
         # pygame.display.update()
         pygame.display.flip()
 
