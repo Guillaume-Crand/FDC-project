@@ -2,7 +2,7 @@ import pygame
 
 pygame.init()
 
-from src.network.server import Server
+from src.network.const import is_server
 from src.sprite.background import Background
 from src.sprite.player import Player
 
@@ -16,16 +16,18 @@ if __name__ == "__main__":
     background = Background(screen)
     to_display = [background, player]
 
-    server = Server(port=40910)
-    server.start()
+    # server = Server(port=40910)
+    # server.start()
 
     running = True
     while running:
         for event in pygame.event.get():
+            print(event, event.type)
             if event.type == pygame.QUIT:
                 running = False
 
             if event.type == pygame.KEYDOWN:
+                print(event.key)
                 match event.key:
                     case pygame.K_p:
                         running = False
@@ -37,9 +39,9 @@ if __name__ == "__main__":
                         player.move(-1, 0)
                     case pygame.K_RIGHT:
                         player.move(1, 0)
-                    case pygame.K_o:
-                        print("Key o")
-                        server.add_messages("saucisse")
+                    # case pygame.K_o:
+                    #     print("Key o")
+                    #     server.add_messages("saucisse")
                     case pygame.K_f:
                         pygame.display.toggle_fullscreen()
                     case _:
@@ -50,7 +52,7 @@ if __name__ == "__main__":
         # pygame.display.update()
         pygame.display.flip()
 
-    server.continue_loop = False
+    # server.continue_loop = False
     pygame.quit()
 
     print("Game closed")
