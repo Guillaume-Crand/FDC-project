@@ -13,6 +13,11 @@ request_search = {
 
 
 class MessageBase:
+    """
+    The class that extends this class should have methods:
+        process_message_received()
+    """
+
     def __init__(self, selector, sock, addr):
         self.selector = selector
         self.sock = sock
@@ -47,18 +52,6 @@ class MessageBase:
             else:
                 raise RuntimeError("Peer closed.")
 
-    def _write(self):
-        if self._send_buffer:
-            print(f"Sending {self._send_buffer!r} to {self.addr}")
-            try:
-                # Should be ready to write
-                sent = self.sock.send(self._send_buffer)
-            except BlockingIOError:
-                # Resource temporarily unavailable (errno EWOULDBLOCK)
-                pass
-            else:
-                self._send_buffer = self._send_buffer[sent:]
-
     def _json_encode(self, obj, encoding):
         return json.dumps(obj, ensure_ascii=False).encode(encoding)
 
@@ -79,6 +72,20 @@ class MessageBase:
         message_hdr = struct.pack(">H", len(jsonheader_bytes))
         message = message_hdr + jsonheader_bytes + content_bytes
         return message
+
+    def read(self):
+        self._read()
+
+        if self._jsonheader_len is None:
+            self.process_protoheader()
+
+        if self._jsonheader_len is not None:
+            if self.jsonheader is None:
+                self.process_jsonheader()
+
+        if self.jsonheader:
+            if self.request is None:
+                return self.process_message_received()
 
     def process_events(self, mask):
         if mask & selectors.EVENT_READ:
@@ -143,6 +150,45 @@ class MessageServer(MessageBase):
                 if sent and not self._send_buffer:
                     self.close()
 
+    def write(self):
+        if self.request:
+            if not self.response_created:
+                self.create_response()
+
+        self._write()
+
+    def process_message_received(self):
+        content_len = self.jsonheader["content-length"]
+        if not len(self._recv_buffer) >= content_len:
+            return
+        data = self._recv_buffer[:content_len]
+        self._recv_buffer = self._recv_buffer[content_len:]
+        if self.jsonheader["content-type"] == "text/json":
+            encoding = self.jsonheader["content-encoding"]
+            self.request = self._json_decode(data, encoding)
+            print(f"Received request {self.request!r} from {self.addr}")
+        else:
+            # Binary or unknown content-type
+            self.request = data
+            print(
+                f"Received {self.jsonheader['content-type']} "
+                f"request from {self.addr}"
+            )
+        # Set selector to listen for write events, we're done reading.
+        self._set_selector_events_mask("w")
+
+        return self.request
+
+    def create_response(self):
+        if self.jsonheader["content-type"] == "text/json":
+            response = self._create_response_json_content()
+        else:
+            # Binary or unknown content-type
+            response = self._create_response_binary_content()
+        message = self._create_message(**response)
+        self.response_created = True
+        self._send_buffer += message
+
     def _create_response_json_content(self):
         action = self.request.get("action")
         if action == "search":
@@ -167,57 +213,6 @@ class MessageServer(MessageBase):
         }
         return response
 
-    def read(self):
-        self._read()
-
-        if self._jsonheader_len is None:
-            self.process_protoheader()
-
-        if self._jsonheader_len is not None:
-            if self.jsonheader is None:
-                self.process_jsonheader()
-
-        if self.jsonheader:
-            if self.request is None:
-                self.process_request()
-
-    def write(self):
-        if self.request:
-            if not self.response_created:
-                self.create_response()
-
-        self._write()
-
-    def process_request(self):
-        content_len = self.jsonheader["content-length"]
-        if not len(self._recv_buffer) >= content_len:
-            return
-        data = self._recv_buffer[:content_len]
-        self._recv_buffer = self._recv_buffer[content_len:]
-        if self.jsonheader["content-type"] == "text/json":
-            encoding = self.jsonheader["content-encoding"]
-            self.request = self._json_decode(data, encoding)
-            print(f"Received request {self.request!r} from {self.addr}")
-        else:
-            # Binary or unknown content-type
-            self.request = data
-            print(
-                f"Received {self.jsonheader['content-type']} "
-                f"request from {self.addr}"
-            )
-        # Set selector to listen for write events, we're done reading.
-        self._set_selector_events_mask("w")
-
-    def create_response(self):
-        if self.jsonheader["content-type"] == "text/json":
-            response = self._create_response_json_content()
-        else:
-            # Binary or unknown content-type
-            response = self._create_response_binary_content()
-        message = self._create_message(**response)
-        self.response_created = True
-        self._send_buffer += message
-
 
 class MessageClient(MessageBase):
     def __init__(self, selector, sock, addr, request):
@@ -226,28 +221,17 @@ class MessageClient(MessageBase):
         self._request_queued = False
         self.response = None
 
-    def _process_response_json_content(self):
-        content = self.response
-        result = content.get("result")
-        print(f"Got result: {result}")
-
-    def _process_response_binary_content(self):
-        content = self.response
-        print(f"Got response: {content!r}")
-
-    def read(self):
-        self._read()
-
-        if self._jsonheader_len is None:
-            self.process_protoheader()
-
-        if self._jsonheader_len is not None:
-            if self.jsonheader is None:
-                self.process_jsonheader()
-
-        if self.jsonheader:
-            if self.response is None:
-                self.process_response()
+    def _write(self):
+        if self._send_buffer:
+            print(f"Sending {self._send_buffer!r} to {self.addr}")
+            try:
+                # Should be ready to write
+                sent = self.sock.send(self._send_buffer)
+            except BlockingIOError:
+                # Resource temporarily unavailable (errno EWOULDBLOCK)
+                pass
+            else:
+                self._send_buffer = self._send_buffer[sent:]
 
     def write(self):
         if not self._request_queued:
@@ -280,7 +264,7 @@ class MessageClient(MessageBase):
         self._send_buffer += message
         self._request_queued = True
 
-    def process_response(self):
+    def process_message_received(self):
         content_len = self.jsonheader["content-length"]
         if not len(self._recv_buffer) >= content_len:
             return
@@ -301,3 +285,12 @@ class MessageClient(MessageBase):
             self._process_response_binary_content()
         # Close when response has been processed
         self.close()
+
+    def _process_response_json_content(self):
+        content = self.response
+        result = content.get("result")
+        print(f"Got result: {result}")
+
+    def _process_response_binary_content(self):
+        content = self.response
+        print(f"Got response: {content!r}")
