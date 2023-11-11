@@ -5,6 +5,8 @@ import selectors
 import struct
 import sys
 
+from message_utils import unwrap_json_bytes_into_obj
+
 request_search = {
     "morpheus": "Follow the white rabbit. \U0001f430",
     "ring": "In the caves beneath the Misty Mountains. \U0001f48d",
@@ -13,11 +15,6 @@ request_search = {
 
 
 class MessageBase:
-    """
-    The class that extends this class should have methods:
-        process_message_received()
-    """
-
     def __init__(self, selector, sock, addr):
         self.selector = selector
         self.sock = sock
@@ -76,22 +73,16 @@ class MessageBase:
     def read(self):
         self._read()
 
-        if self._jsonheader_len is None:
-            self.process_protoheader()
+        self._recv_buffer, is_received = unwrap_json_bytes_into_obj(self._recv_buffer)
+        if is_received:
+            return self.process_message_received(is_received)
+        return None
 
-        if self._jsonheader_len is not None:
-            if self.jsonheader is None:
-                self.process_jsonheader()
-
-        if self.jsonheader:
-            if self.request is None:
-                return self.process_message_received()
-
-    def process_events(self, mask):
-        if mask & selectors.EVENT_READ:
-            self.read()
-        if mask & selectors.EVENT_WRITE:
-            self.write()
+    # def process_events(self, mask):
+    #     if mask & selectors.EVENT_READ:
+    #         return self.read()
+    #     if mask & selectors.EVENT_WRITE:
+    #         return self.write()
 
     def close(self):
         print(f"Closing connection to {self.addr}")
@@ -108,25 +99,9 @@ class MessageBase:
             # Delete reference to socket object for garbage collection
             self.sock = None
 
-    def process_protoheader(self):
-        hdrlen = 2
-        if len(self._recv_buffer) >= hdrlen:
-            self._jsonheader_len = struct.unpack(">H", self._recv_buffer[:hdrlen])[0]
-            self._recv_buffer = self._recv_buffer[hdrlen:]
-
-    def process_jsonheader(self):
-        hdrlen = self._jsonheader_len
-        if len(self._recv_buffer) >= hdrlen:
-            self.jsonheader = self._json_decode(self._recv_buffer[:hdrlen], "utf-8")
-            self._recv_buffer = self._recv_buffer[hdrlen:]
-            for reqhdr in (
-                "byteorder",
-                "content-length",
-                "content-type",
-                "content-encoding",
-            ):
-                if reqhdr not in self.jsonheader:
-                    raise ValueError(f"Missing required header '{reqhdr}'.")
+    def process_message_received(self, obj):
+        print(obj)
+        # raise NotImplementedError(f"process_message_received")
 
 
 class MessageServer(MessageBase):
@@ -157,34 +132,37 @@ class MessageServer(MessageBase):
 
         self._write()
 
-    def process_message_received(self):
-        content_len = self.jsonheader["content-length"]
-        if not len(self._recv_buffer) >= content_len:
-            return
-        data = self._recv_buffer[:content_len]
-        self._recv_buffer = self._recv_buffer[content_len:]
-        if self.jsonheader["content-type"] == "text/json":
-            encoding = self.jsonheader["content-encoding"]
-            self.request = self._json_decode(data, encoding)
-            print(f"Received request {self.request!r} from {self.addr}")
-        else:
-            # Binary or unknown content-type
-            self.request = data
-            print(
-                f"Received {self.jsonheader['content-type']} "
-                f"request from {self.addr}"
-            )
+    def process_message_received(self, obj):
+        # content_len = self.jsonheader["content-length"]
+        # if not len(self._recv_buffer) >= content_len:
+        #     return
+        # data = self._recv_buffer[:content_len]
+        # self._recv_buffer = self._recv_buffer[content_len:]
+        # if self.jsonheader["content-type"] == "text/json":
+        #     encoding = self.jsonheader["content-encoding"]
+
+        #     self.request = self._json_decode(data, encoding)
+        #     print(f"Received request {self.request!r} from {self.addr}")
+        # else:
+        #     # Binary or unknown content-type
+        #     self.request = data
+        #     print(
+        #         f"Received {self.jsonheader['content-type']} "
+        #         f"request from {self.addr}"
+        #     )
+        self.request = obj
         # Set selector to listen for write events, we're done reading.
         self._set_selector_events_mask("w")
 
         return self.request
 
     def create_response(self):
-        if self.jsonheader["content-type"] == "text/json":
-            response = self._create_response_json_content()
-        else:
-            # Binary or unknown content-type
-            response = self._create_response_binary_content()
+        # if self.jsonheader["content-type"] == "text/json":
+        #     response = self._create_response_json_content()
+        # else:
+        #     # Binary or unknown content-type
+        #     response = self._create_response_binary_content()
+        response = self._create_response_json_content()
         message = self._create_message(**response)
         self.response_created = True
         self._send_buffer += message
@@ -219,7 +197,6 @@ class MessageClient(MessageBase):
         super().__init__(selector, sock, addr)
         self.request = request
         self._request_queued = False
-        self.response = None
 
     def _write(self):
         if self._send_buffer:
@@ -270,27 +247,20 @@ class MessageClient(MessageBase):
             return
         data = self._recv_buffer[:content_len]
         self._recv_buffer = self._recv_buffer[content_len:]
-        if self.jsonheader["content-type"] == "text/json":
-            encoding = self.jsonheader["content-encoding"]
-            self.response = self._json_decode(data, encoding)
-            print(f"Received response {self.response!r} from {self.addr}")
-            self._process_response_json_content()
-        else:
-            # Binary or unknown content-type
-            self.response = data
-            print(
-                f"Received {self.jsonheader['content-type']} "
-                f"response from {self.addr}"
+
+        if self.jsonheader["content-type"] != "text/json":
+            raise ValueError(
+                f"Binary or unknown content-type : {self.jsonheader['content-type']}"
             )
-            self._process_response_binary_content()
-        # Close when response has been processed
+
+        else:
+            encoding = self.jsonheader["content-encoding"]
+            message = self._json_decode(data, encoding)
+
+            print(f"Received response {message!r} from {self.addr}")
+            content = message
+            result = content.get("result")
+            print(f"Got result: {result}")
         self.close()
 
-    def _process_response_json_content(self):
-        content = self.response
-        result = content.get("result")
-        print(f"Got result: {result}")
-
-    def _process_response_binary_content(self):
-        content = self.response
-        print(f"Got response: {content!r}")
+        return message
